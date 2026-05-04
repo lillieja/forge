@@ -1,1 +1,5 @@
-mediapipe_env/
+.tests/
+.training/
+
+models/custom/*
+!models/custom/.gitkeep
