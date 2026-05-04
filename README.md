@@ -27,7 +27,7 @@ forge/
 │   ├── collection/         # Capture frames into data/gestures/
 │   ├── tests/              # Offline eval + live webcam demos
 │   └── training/           # MediaPipe Model Maker training
-├── hardware/               # Serial / servo experiments (not MediaPipe)
+├── hardware/               # Serial / servo demos (some pair with gesture + camera)
 ├── .tests/                 # uv virtualenv — inference, collection, evaluation (see below)
 ├── .training/              # venv — MediaPipe Model Maker / TensorFlow training stack
 └── README.md
@@ -44,7 +44,7 @@ Folders named after gesture **labels**; each contains `.jpg`/`.png` images. Used
 | `models/weights/` | Static or one-time–downloaded `.task` files for **GestureRecognizer** (default and shared weights). |
 | `models/custom/` | **Training output**: `gesture_recognizer.task`, checkpoints, TensorBoard logs, `metadata.json`, etc. `scripts/training/gesture_training.py` clears this directory before each run. |
 
-Live demos that use a **custom** model read `models/weights/gesture_recognizer.task` (copy or symlink your exported task here if you use `gesture_tracker_custom.py`).
+Live demos that use a **custom** model read `models/weights/gesture_recognizer.task` — copy or symlink your export there for **`gesture_tracker_custom.py`**, **`swiper_gesture.py`**, and **`hardware/servo_gesture.py`**.
 
 ### `scripts/collection/`
 
@@ -60,7 +60,8 @@ Live demos that use a **custom** model read `models/weights/gesture_recognizer.t
 | `gesture_tracker_default.py` | Webcam: real-time **default** gesture model; may download `models/weights/gesture_recognizer.task`. |
 | `gesture_tracker_custom.py` | Webcam: real-time recognizer using `models/weights/gesture_recognizer.task` (your trained export). |
 | `hand_tracker.py` | Webcam: classic MediaPipe **Hands** landmarks + skeleton; prints index-tip coordinates. |
-| `swiper.py` | Webcam: wrist motion → **pyautogui** desktop switch shortcuts (`Ctrl+Alt+Left/Right`) with cooldown. |
+| `swiper.py` | Webcam: wrist motion in screen **edge zones** → **pyautogui** desktop switch (`Ctrl+Alt+Left/Right`) with cooldown. |
+| `swiper_gesture.py` | Webcam: **open palm** + sustained left/right **drag** (anywhere in frame) + same desktop hotkeys; MediaPipe **Hands** + `models/weights/gesture_recognizer.task`. |
 
 ### `scripts/training/`
 
@@ -74,6 +75,7 @@ Live demos that use a **custom** model read `models/weights/gesture_recognizer.t
 | Script | Purpose |
 |--------|---------|
 | `servo_test.py` | Writes angles over **pyserial** to a fixed port (`/dev/ttyCH341USB0` @ 9600 baud); sweep example for an attached MCU. |
+| `servo_gesture.py` | Webcam + `models/weights/gesture_recognizer.task`: **light** vs **closed** gesture (debounced) → two servo angles; same serial line protocol as `servo_test.py`. |
 
 ---
 
@@ -104,82 +106,17 @@ python scripts/training/gesture_training.py
 
 ---
 
-## Dependencies for **testing** (`scripts/tests` + `collection`)
+## Dependencies
 
-### What the code imports
+Most scripts need **Python 3.10+**, **MediaPipe**, **OpenCV** (`opencv-python`), and a **NumPy** pin compatible with MediaPipe (commonly `numpy<2`). **Swiper** scripts also need **pyautogui**. **Hardware** scripts need **pyserial**.
 
-| Area | Direct imports |
-|------|----------------|
-| `scripts/tests/*` (except evaluate) | `cv2` (**OpenCV**), `mediapipe` |
-| `scripts/tests/swiper.py` | also `pyautogui` |
-| `scripts/tests/evaluate_default.py` | `mediapipe` (Tasks API), stdlib `urllib` |
-| `scripts/collection/collector.py` | `cv2` only |
-
-Installing the **minimal** set into a fresh env (versions aligned with the current **`.tests`** uv environment):
+Example minimal install:
 
 ```bash
-uv venv .tests
-source .tests/bin/activate
-uv pip install \
-  "mediapipe==0.10.18" \
-  "opencv-python==4.11.0.86" \
-  "pyautogui==0.9.54" \
-  "numpy==1.26.4"
+uv venv .tests && source .tests/bin/activate
+uv pip install "numpy<2" mediapipe opencv-python pyautogui pyserial
 ```
 
-Optional: the project’s `.tests` venv also has **`opencv-contrib-python`**; either `opencv-python` or `opencv-contrib-python` satisfies `import cv2`. For **hardware** scripts, add **`pyserial`** (e.g. `pyserial==3.5` in `.tests`).
+**Training** (`scripts/training/gesture_training.py`): use the **`.training`** environment and install **mediapipe-model-maker** plus its TensorFlow stack per [MediaPipe Model Maker](https://developers.google.com/mediapipe/solutions/model_maker) and your OS/GPU notes.
 
-### Packages in the checked-in **`.tests`** environment (reference)
-
-Core libraries that matter for **running the test/collection scripts**:
-
-| Package | Version (`.tests`) |
-|---------|---------------------|
-| mediapipe | 0.10.18 |
-| numpy | 1.26.4 |
-| opencv-python | 4.11.0.86 |
-| opencv-contrib-python | 4.11.0.86 |
-| pyautogui | 0.9.54 |
-| pyserial | 3.5 |
-
-The same venv currently pulls in a **much larger** stack (TensorFlow 2.19, JAX, TensorFlow Datasets, Kaggle client, scikit-learn, pandas, etc.) — pulled in by tooling and transitive deps, not by the small scripts above. To inspect everything exactly as installed:
-
-```bash
-uv pip list --python .tests/bin/python
-# or: uv pip freeze --python .tests/bin/python
-```
-
-### Training stack (not required for `scripts/tests`)
-
-`mediapipe-model-maker` lives in **`.training`**, not `.tests`. Illustrative pins from **`.training`**:
-
-| Package | Version (`.training`) |
-|---------|------------------------|
-| mediapipe | 0.10.9 |
-| mediapipe-model-maker | 0.2.1.4 |
-| numpy | 1.26.4 |
-| tensorflow | 2.15.0 |
-| opencv-contrib-python | 4.13.0.92 |
-
-Full list: `uv pip list --python .training/bin/python`. If `import mediapipe_model_maker` fails on optional modules, follow MediaPipe Model Maker install notes for your platform (e.g. `tensorflow-text`).
-
----
-
-## End-to-end flow (conceptual)
-
-```mermaid
-flowchart LR
-  collect[scripts/collection/collector.py]
-  data[data/gestures]
-  train[scripts/training/gesture_training.py]
-  custom[models/custom]
-  weights[models/weights]
-  tests[scripts/tests]
-  collect --> data
-  data --> train
-  train --> custom
-  custom --> weights
-  weights --> tests
-```
-
-Copy or point `gesture_tracker_custom.py` at the exported `.task` you want to use under `models/weights/`.
+List packages in an existing venv: `uv pip list --python .tests/bin/python` (or `.training/bin/python`).
