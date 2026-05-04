@@ -28,8 +28,8 @@ forge/
 │   ├── tests/              # Offline eval + live webcam demos
 │   └── training/           # MediaPipe Model Maker training
 ├── hardware/               # Serial / servo demos (some pair with gesture + camera)
-├── .tests/                 # uv virtualenv — inference, collection, evaluation (see below)
-├── .training/              # venv — MediaPipe Model Maker / TensorFlow training stack
+├── .tests/                 # uv — inference, collection, evaluation (see below)
+├── .training/              # uv — MediaPipe Model Maker / TensorFlow training stack
 └── README.md
 ```
 
@@ -72,8 +72,9 @@ Live demos that use a **custom** model read `models/weights/gesture_recognizer.t
 
 ### `hardware/`
 
-| Script | Purpose |
-|--------|---------|
+| File | Purpose |
+|------|---------|
+| `arduino.ino` | **Arduino sketch** (upload to the board connected to the servo): listens on **Serial @ 9600 baud** for newline-terminated integers **0–180** (`Serial.parseInt`), drives a **servo on pin 9**. Load this onto the Arduino so the **main computer** (e.g. Jetson running the Python scripts below) can command the servo over USB serial. |
 | `servo_test.py` | Writes angles over **pyserial** to a fixed port (`/dev/ttyCH341USB0` @ 9600 baud); sweep example for an attached MCU. |
 | `servo_gesture.py` | Webcam + `models/weights/gesture_recognizer.task`: **light** vs **closed** gesture (debounced) → two servo angles; same serial line protocol as `servo_test.py`. |
 
