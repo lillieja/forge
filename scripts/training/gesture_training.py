@@ -31,6 +31,10 @@ if not hasattr(tpu, 'embedding_context_utils'):
         
 import os
 import shutil
+import random
+from pathlib import Path
+from typing import Iterable
+import cv2
 
 import site
 sys.path.append(site.getusersitepackages())
@@ -42,6 +46,9 @@ os.environ['TF_USE_LEGACY_KERAS'] = '1'
 try:
     import numpy
     from mediapipe_model_maker import gesture_recognizer
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
     
     if numpy.version.version.startswith('2.'):
         raise ImportError("NumPy 2.x detected. MediaPipe Model Maker requires NumPy < 2.0.0")
@@ -59,7 +66,92 @@ DATASET_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "gest
 
 # Points to the new models folder
 EXPORT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "models", "custom")
+OUR_TASK_PATH = os.path.join(EXPORT_DIR, "gesture_recognizer.task")
+GOOGLE_TASK_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "models", "weights", "google_gesture_recognizer.task"
+)
 # ---------------------
+
+
+def _norm_label(label: str) -> str:
+    return "".join(ch for ch in label.lower() if ch.isalnum() or ch == "_")
+
+
+def _make_eval_splits(
+    dataset_root: str, train_ratio: float = 0.8, val_ratio: float = 0.1, seed: int = 42
+) -> tuple[list[tuple[Path, str]], list[tuple[Path, str]], list[tuple[Path, str]]]:
+    root = Path(dataset_root)
+    rng = random.Random(seed)
+    train_samples: list[tuple[Path, str]] = []
+    val_samples: list[tuple[Path, str]] = []
+    test_samples: list[tuple[Path, str]] = []
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    for label_dir in sorted([p for p in root.iterdir() if p.is_dir()]):
+        files = [p for p in sorted(label_dir.iterdir()) if p.suffix.lower() in exts]
+        if not files:
+            continue
+        rng.shuffle(files)
+        n = len(files)
+        n_train = int(n * train_ratio)
+        n_val = int(n * val_ratio)
+        if n_train <= 0:
+            n_train = 1
+        if n_train + n_val >= n:
+            n_val = max(0, n - n_train - 1)
+        train = files[:n_train]
+        val = files[n_train : n_train + n_val]
+        test = files[n_train + n_val :]
+        if not test and val:
+            test = [val.pop()]
+        label = label_dir.name
+        train_samples.extend((p, label) for p in train)
+        val_samples.extend((p, label) for p in val)
+        test_samples.extend((p, label) for p in test)
+    return train_samples, val_samples, test_samples
+
+
+def _iter_top_predictions(task_path: str, samples: Iterable[tuple[Path, str]]) -> tuple[int, int]:
+    if not os.path.isfile(task_path):
+        print(f"Task not found, skipping eval: {task_path}")
+        return 0, 0
+    options = mp_vision.GestureRecognizerOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=task_path)
+    )
+    recognizer = mp_vision.GestureRecognizer.create_from_options(options)
+    correct = 0
+    total = 0
+    try:
+        for img_path, expected in samples:
+            bgr = cv2.imread(str(img_path))
+            if bgr is None:
+                continue
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = recognizer.recognize(mp_image)
+            pred = "none"
+            if result.gestures and result.gestures[0]:
+                top = max(result.gestures[0], key=lambda c: float(c.score))
+                pred = getattr(top, "category_name", "") or getattr(top, "display_name", "") or "none"
+            if _norm_label(pred) == _norm_label(expected):
+                correct += 1
+            total += 1
+    finally:
+        recognizer.close()
+    return correct, total
+
+
+def _print_acc(prefix: str, correct: int, total: int) -> None:
+    if total == 0:
+        print(f"{prefix}: N/A (no samples)")
+        return
+    print(f"{prefix}: {correct}/{total} ({(100.0 * correct / total):.2f}%)")
+
+
+def _without_label(
+    samples: list[tuple[Path, str]], label_to_skip: str
+) -> list[tuple[Path, str]]:
+    skip_norm = _norm_label(label_to_skip)
+    return [(p, y) for (p, y) in samples if _norm_label(y) != skip_norm]
 
 # 0. Clear previous model artifacts
 if os.path.exists(EXPORT_DIR):
@@ -103,6 +195,25 @@ model = gesture_recognizer.GestureRecognizer.create(
 print("Exporting model...")
 model.export_model()
 
-full_export_path = os.path.abspath(os.path.join(EXPORT_DIR, 'gesture_recognizer.task'))
+full_export_path = os.path.abspath(OUR_TASK_PATH)
+
+print("\nRunning validation/test comparison...")
+_, val_samples, test_samples = _make_eval_splits(DATASET_PATH)
+our_val_c, our_val_n = _iter_top_predictions(full_export_path, val_samples)
+our_test_c, our_test_n = _iter_top_predictions(full_export_path, test_samples)
+val_samples_google = _without_label(val_samples, "light")
+test_samples_google = _without_label(test_samples, "light")
+goog_val_c, goog_val_n = _iter_top_predictions(
+    os.path.abspath(GOOGLE_TASK_PATH), val_samples_google
+)
+goog_test_c, goog_test_n = _iter_top_predictions(
+    os.path.abspath(GOOGLE_TASK_PATH), test_samples_google
+)
+
 print(f"\nSuccess! Training complete.")
 print(f"Your model is ready at: {full_export_path}")
+print("\nAccuracy comparison on held-out splits:")
+_print_acc("Our model   | Validation", our_val_c, our_val_n)
+_print_acc("Our model   | Test      ", our_test_c, our_test_n)
+_print_acc("Google model| Validation", goog_val_c, goog_val_n)
+_print_acc("Google model| Test      ", goog_test_c, goog_test_n)

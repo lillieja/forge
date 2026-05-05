@@ -14,10 +14,8 @@ def set_servo_angle(angle):
 try:
     while True:
         set_servo_angle(0)
-        time.sleep(1)
+        time.sleep(0.1)
         set_servo_angle(90)
-        time.sleep(1)
-        set_servo_angle(180)
         time.sleep(1)
 except KeyboardInterrupt:
     ser.close()

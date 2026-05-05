@@ -3,3 +3,8 @@
 
 models/custom/*
 !models/custom/.gitkeep
+
+__pycache__/
+models/weights/extracted_tflite/    
+models/weights/old/
+models/weights/working_engines/
